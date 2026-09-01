@@ -33,8 +33,8 @@ contract Counter {
         FHE.allowSender(count);
     }
 
-    function reset(InEuint32 memory value) public {
-        count = FHE.asEuint32(value);
+    function reset(externalEuint32 value, bytes memory proof) public {
+        count = FHE.asEuint32(value, proof);
         FHE.allowThis(count);
         FHE.allowSender(count);
     }
