@@ -27,10 +27,15 @@ task('reset-counter', 'reset the counter').setAction(async (_, hre: HardhatRunti
 	const Counter = await ethers.getContractFactory('Counter')
 	const counter = Counter.attach(counterAddress) as unknown as Counter
 
-	const encrypted = await client.encryptInputs([Encryptable.uint32(2000n)]).execute()
+	// The consuming contract is the one that runs FHE.asEuint32 - the Counter itself.
+	// The batch signature is bound to it, so it cannot be replayed against another contract.
+	const [valueHash, proof] = await client
+		.encryptInputs([Encryptable.uint32(2000n)])
+		.setConsumingContract(counterAddress)
+		.execute()
 
 	console.log('Resetting counter...')
-	const tx = await counter.reset(encrypted[0])
+	const tx = await counter.reset(valueHash, proof)
 	await tx.wait()
 	console.log(`Transaction hash: ${tx.hash}`)
 

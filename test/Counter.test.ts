@@ -1,7 +1,7 @@
 import { loadFixture } from "@nomicfoundation/hardhat-toolbox/network-helpers";
 import hre from "hardhat";
 import { Encryptable, FheTypes } from "@cofhe/sdk";
-import { PermitUtils } from "@cofhe/sdk/permits";
+import { ACPUtils } from "@cofhe/sdk/acps";
 import { expect } from "chai";
 
 const TASK_COFHE_MOCKS_DEPLOY = "task:cofhe-mocks:deploy";
@@ -15,9 +15,13 @@ describe("Counter", function () {
     const Counter = await hre.ethers.getContractFactory("Counter");
     const counter = await Counter.connect(bob).deploy();
 
+    // The consuming contract for every encrypted input below: Counter.reset is
+    // what calls FHE.asEuint32, and the batch signature is bound to that address.
+    const counterAddress = await counter.getAddress();
+
     const client = await hre.cofhe.createClientWithBatteries(bob);
 
-    return { counter, signer, bob, alice, client };
+    return { counter, counterAddress, signer, bob, alice, client };
   }
 
   describe("Functionality", function () {
@@ -61,12 +65,16 @@ describe("Counter", function () {
     });
 
     it("Should encrypt input and reset counter", async function () {
-      const { counter, bob, client } = await loadFixture(deployCounterFixture);
+      const { counter, counterAddress, bob, client } = await loadFixture(
+        deployCounterFixture,
+      );
 
-      const encrypted = await client
+      // execute() returns one handle per input, followed by a single batch signature
+      const [valueHash, proof] = await client
         .encryptInputs([Encryptable.uint32(2000n)])
+        .setConsumingContract(counterAddress)
         .execute();
-      await counter.connect(bob).reset(encrypted[0]);
+      await counter.connect(bob).reset(valueHash, proof);
 
       const count = await counter.count();
       const decrypted = await client
@@ -76,13 +84,16 @@ describe("Counter", function () {
     });
 
     it("Should handle multiple operations in sequence", async function () {
-      const { counter, bob, client } = await loadFixture(deployCounterFixture);
+      const { counter, counterAddress, bob, client } = await loadFixture(
+        deployCounterFixture,
+      );
 
       // Reset to 10
-      const encrypted = await client
+      const [valueHash, proof] = await client
         .encryptInputs([Encryptable.uint32(10n)])
+        .setConsumingContract(counterAddress)
         .execute();
-      await counter.connect(bob).reset(encrypted[0]);
+      await counter.connect(bob).reset(valueHash, proof);
 
       // Increment 3 times: 10 -> 11 -> 12 -> 13
       await counter.connect(bob).increment();
@@ -102,13 +113,16 @@ describe("Counter", function () {
 
   describe("On-chain Decryption", function () {
     it("Should revert getDecryptedValue before decryption result is published", async function () {
-      const { counter, bob, client } = await loadFixture(deployCounterFixture);
+      const { counter, counterAddress, bob, client } = await loadFixture(
+        deployCounterFixture,
+      );
 
       // Set counter to a known value
-      const encrypted = await client
+      const [valueHash, proof] = await client
         .encryptInputs([Encryptable.uint32(42n)])
+        .setConsumingContract(counterAddress)
         .execute();
-      await counter.connect(bob).reset(encrypted[0]);
+      await counter.connect(bob).reset(valueHash, proof);
 
       // Before publishing a decrypt result, getDecryptedValue should revert
       await expect(counter.getDecryptedValue()).to.be.revertedWith(
@@ -117,13 +131,16 @@ describe("Counter", function () {
     });
 
     it("Should return decrypted value after the 3-step decrypt flow", async function () {
-      const { counter, bob, client } = await loadFixture(deployCounterFixture);
+      const { counter, counterAddress, bob, client } = await loadFixture(
+        deployCounterFixture,
+      );
 
       // Set counter to a known value
-      const encrypted = await client
+      const [valueHash, proof] = await client
         .encryptInputs([Encryptable.uint32(42n)])
+        .setConsumingContract(counterAddress)
         .execute();
-      await counter.connect(bob).reset(encrypted[0]);
+      await counter.connect(bob).reset(valueHash, proof);
 
       // Step 1: Grant public decryption permission on-chain
       await counter.connect(bob).allowCounterPublicly();
@@ -132,7 +149,7 @@ describe("Counter", function () {
       const ctHash = await counter.count();
       const result = await client
         .decryptForTx(ctHash)
-        .withoutPermit()
+        .withoutACP()
         .execute();
 
       // Step 3: Submit the verified plaintext + signature back on-chain
@@ -157,7 +174,7 @@ describe("Counter", function () {
       const ctHash = await counter.count();
       const result = await client
         .decryptForTx(ctHash)
-        .withoutPermit()
+        .withoutACP()
         .execute();
 
       await counter
@@ -197,39 +214,39 @@ describe("Counter", function () {
     });
   });
 
-  describe("Permits", function () {
-    it("Self permit should be valid on chain", async function () {
+  describe("ACPs", function () {
+    it("Self ACP should be valid on chain", async function () {
       const { bob, client } = await loadFixture(deployCounterFixture);
 
-      const permit = await client.permits.createSelf({
+      const acp = await client.acp.createSelf({
         issuer: bob.address,
-        name: "Test Permit",
+        name: "Test ACP",
       });
 
-      const isValid = await PermitUtils.checkValidityOnChain(
-        permit,
+      const isValid = await ACPUtils.checkValidityOnChain(
+        acp,
         client.getSnapshot().publicClient!,
       );
 
       expect(isValid).to.be.true;
     });
 
-    it("Expired permit should revert with PermissionInvalid_Expired", async function () {
+    it("Expired ACP should revert with PermissionInvalid_Expired", async function () {
       const { bob, client } = await loadFixture(deployCounterFixture);
 
-      const permit = await client.permits.createSelf({
+      const acp = await client.acp.createSelf({
         issuer: bob.address,
-        name: "Expired Permit",
+        name: "Expired ACP",
         expiration: Math.floor(Date.now() / 1000) - 3600, // 1 hour ago
       });
 
       try {
-        await PermitUtils.checkValidityOnChain(
-          permit,
+        await ACPUtils.checkValidityOnChain(
+          acp,
           client.getSnapshot().publicClient!,
         );
         expect.fail(
-          "Expected PermitUtils.checkValidityOnChain to throw for expired permit",
+          "Expected ACPUtils.checkValidityOnChain to throw for expired ACP",
         );
       } catch (error) {
         expect(error).to.be.instanceOf(Error);
@@ -240,22 +257,22 @@ describe("Counter", function () {
     it("Invalid issuer signature should revert with PermissionInvalid_IssuerSignature", async function () {
       const { bob, client } = await loadFixture(deployCounterFixture);
 
-      const permit = await client.permits.createSelf({
+      const acp = await client.acp.createSelf({
         issuer: bob.address,
-        name: "Tampered Permit",
+        name: "Tampered ACP",
       });
 
       // Tamper with the issuer signature
-      permit.issuerSignature =
+      acp.issuerSignature =
         "0xAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 
       try {
-        await PermitUtils.checkValidityOnChain(
-          permit,
+        await ACPUtils.checkValidityOnChain(
+          acp,
           client.getSnapshot().publicClient!,
         );
         expect.fail(
-          "Expected PermitUtils.checkValidityOnChain to throw for invalid signature",
+          "Expected ACPUtils.checkValidityOnChain to throw for invalid signature",
         );
       } catch (error) {
         expect(error).to.be.instanceOf(Error);

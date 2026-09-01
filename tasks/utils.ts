@@ -68,7 +68,7 @@ export const createCofheClient = async (hre: HardhatRuntimeEnvironment, signer: 
 	const { publicClient, walletClient } = await hre.cofhe.hardhatSignerAdapter(signer)
 	await client.connect(publicClient, walletClient)
 
-	await client.permits.createSelf({
+	await client.acp.createSelf({
 		issuer: signer.address,
 	})
 
