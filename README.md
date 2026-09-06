@@ -1,6 +1,6 @@
 # Fhenix CoFHE Hardhat Starter
 
-This project is a starter repository for developing FHE (Fully Homomorphic Encryption) smart contracts on the Fhenix network using CoFHE (Confidential Computing Framework for Homomorphic Encryption).
+Starter repository for building FHE (Fully Homomorphic Encryption) smart contracts with Fhenix CoFHE.
 
 ## Prerequisites
 
@@ -75,27 +75,43 @@ Each supported testnet has deploy, increment, and reset tasks:
   - `reset-counter.ts` - Reset the counter with an encrypted input
   - `utils.ts` - Shared utilities (deployment tracking, CoFHE client creation)
 
+## Migrating from permits (0.5.x) to ACPs (0.7.x)
+
+`@cofhe/sdk` 0.7 renames the permit subsystem to **ACP** (Access Control Permission). There are no shims: old imports fail to resolve.
+
+| 0.5.x | 0.7.x |
+|-------|-------|
+| `@cofhe/sdk/permits` | `@cofhe/sdk/acps` |
+| `PermitUtils` | `ACPUtils` |
+| `client.permits.createSelf(...)` | `client.acp.createSelf(...)` |
+| `Permit` / `Permission` | `ACP` / `ACPPublic` |
+| `.withoutPermit()` | `.withoutACP()` |
+
+This template targets `@cofhe/sdk` `^0.7.1`. Full migration notes: [Migrating to 0.7.0](https://cofhesdk.fhenix.io/migrating-to-0-7-0).
+
 ## `@cofhe/sdk` and `@cofhe/hardhat-plugin`
 
-This project uses `@cofhe/sdk` and the `@cofhe/hardhat-plugin` to interact with FHE (Fully Homomorphic Encryption) smart contracts. Here are the key features and utilities:
+This project uses `@cofhe/sdk` and the `@cofhe/hardhat-plugin` to interact with FHE smart contracts.
 
 ### `@cofhe/sdk` Features
 
-- **Encryption**: Encrypt values before sending them to FHE contracts
+- **Encryption**: Encrypt values before sending them to FHE contracts. Every batch must declare the consuming contract.
 
   ```typescript
-  import { Encryptable, FheTypes } from '@cofhe/sdk'
+  import { Encryptable } from '@cofhe/sdk'
 
-  // Encrypt an input value
-  const encrypted = await client
+  // execute() returns one handle per input, then a single batch signature
+  const [valueHash, proof] = await client
     .encryptInputs([Encryptable.uint32(2000n)])
+    .setConsumingContract(counterAddress)
     .execute()
   ```
 
 - **Decryption (off-chain view)**: Decrypt ciphertext handles for reading values off-chain
 
   ```typescript
-  // Decrypt a ciphertext handle (off-chain, read-only)
+  import { FheTypes } from '@cofhe/sdk'
+
   const decrypted = await client
     .decryptForView(ciphertextHandle, FheTypes.Uint32)
     .execute()
@@ -110,7 +126,7 @@ This project uses `@cofhe/sdk` and the `@cofhe/hardhat-plugin` to interact with 
   // Step 2: Decrypt off-chain via the SDK (returns plaintext + Threshold Network signature)
   const result = await client
     .decryptForTx(ctHash)
-    .withoutPermit()
+    .withoutACP()
     .execute()
 
   // Step 3: Submit the verified plaintext + signature back on-chain
@@ -118,19 +134,20 @@ This project uses `@cofhe/sdk` and the `@cofhe/hardhat-plugin` to interact with 
   // calls FHE.publishDecryptResult(ctHash, plaintext, signature)
   ```
 
-- **Permits**: Create and validate permits for secure contract interactions
-  ```typescript
-  import { PermitUtils } from '@cofhe/sdk/permits'
+- **ACPs**: Create and validate access control permissions for secure contract interactions
 
-  // Create a self-permit
-  const permit = await client.permits.createSelf({
+  ```typescript
+  import { ACPUtils } from '@cofhe/sdk/acps'
+
+  // Create a self ACP
+  const acp = await client.acp.createSelf({
     issuer: signer.address,
-    name: 'My Permit',
+    name: 'My ACP',
   })
 
-  // Validate a permit on-chain
-  const isValid = await PermitUtils.checkValidityOnChain(
-    permit,
+  // Validate an ACP on-chain
+  const isValid = await ACPUtils.checkValidityOnChain(
+    acp,
     client.getSnapshot().publicClient!,
   )
   ```
@@ -191,13 +208,13 @@ if (chain.environment === 'MOCK') {
 
 ### `@cofhe/sdk`
 
-`@cofhe/sdk` is the JavaScript/TypeScript SDK for interacting with FHE smart contracts. It provides a client-based API for encryption, decryption, and permit management.
+`@cofhe/sdk` is the JavaScript/TypeScript SDK for interacting with FHE smart contracts. It provides a client-based API for encryption, decryption, and ACP management.
 
 #### Key Features
 
 - Encryption of data before sending to FHE contracts
 - Decryption of ciphertext handles from contracts
-- Managing permits for secure contract interactions
+- Managing ACPs for secure contract interactions
 - Chain configuration and environment detection
 - Integration with Web3 libraries (ethers.js and viem)
 
